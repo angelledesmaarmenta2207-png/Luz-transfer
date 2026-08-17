@@ -473,6 +473,29 @@ function decodePacket(bytes) {
 }
 
 /* ============================================================
+ * base64.js — conversión bytes <-> Base64
+ * Usamos Base64 (texto) en vez de pasar Uint8Array binario crudo al
+ * generador/lector de QR: es ~33% menos compacto, pero es 100%
+ * compatible con cualquier navegador/versión de librería, evitando
+ * fallos silenciosos por soporte inconsistente de "modo byte".
+ * ========================================================== */
+function bytesToBase64(bytes) {
+  let binary = '';
+  const chunkSize = 8192;
+  for (let i = 0; i < bytes.length; i += chunkSize) {
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+  }
+  return btoa(binary);
+}
+
+function base64ToBytes(b64) {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+
+/* ============================================================
  * sender.js — módulo Emisor
  * ========================================================== */
 class SenderModule {
@@ -544,248 +567,3 @@ class SenderModule {
   _reschedule() {
     if (this.timerHandle) clearInterval(this.timerHandle);
     const intervalMs = 1000 / this.fps;
-    this.timerHandle = setInterval(() => this._renderNextFrame(), intervalMs);
-  }
-
-  _renderNextFrame() {
-    const isMetadataFrame = this.frameCount % CONFIG.METADATA_EVERY === 0;
-    let bytes;
-
-    if (isMetadataFrame) {
-      bytes = encodeMetadataPacket({
-        fileId: this.fileId,
-        fileSize: this.fileMeta.size,
-        blockSize: CONFIG.BLOCK_SIZE,
-        totalBlocks: this.encoder.K,
-        name: this.fileMeta.name,
-        mime: this.fileMeta.mime,
-      });
-    } else {
-      this.seedCounter = (this.seedCounter + 1) >>> 0;
-      const { seed, payload } = this.encoder.nextPacket(this.seedCounter);
-      bytes = encodeDataPacket({ fileId: this.fileId, seed, payload });
-    }
-
-    this.frameCount++;
-    this._drawQR(bytes);
-    this.dom.frameCounter.textContent = `Paquetes enviados: ${this.frameCount}`;
-  }
-
-  _drawQR(bytes) {
-    const segments = [{ data: bytes, mode: 'byte' }];
-    QRCode.toCanvas(
-      this.dom.qrCanvas,
-      segments,
-      { errorCorrectionLevel: CONFIG.QR_ECC, margin: 2, scale: 6 },
-      (err) => { if (err) console.error('Error generando QR:', err); }
-    );
-  }
-}
-
-/* ============================================================
- * receiver.js — módulo Receptor
- * ========================================================== */
-class ReceiverModule {
-  constructor(dom) {
-    this.dom = dom;
-    this.stream = null;
-    this.scanning = false;
-    this.rafHandle = null;
-
-    this.currentFileId = null;
-    this.decoder = null;
-    this.fileMeta = null;
-    this.uniquePackets = 0;
-
-    this.canvas = document.createElement('canvas');
-    this.ctx = this.canvas.getContext('2d', { willReadFrequently: true });
-
-    this.dom.startCameraBtn.addEventListener('click', () => this.startCamera());
-    this.dom.stopCameraBtn.addEventListener('click', () => this.stopCamera());
-  }
-
-  async startCamera() {
-    if (this.scanning) return;
-    try {
-      this.stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
-        audio: false,
-      });
-    } catch (err) {
-      this.dom.rxStatus.textContent = `No se pudo acceder a la cámara: ${err.message}`;
-      this.dom.rxStatus.classList.add('error');
-      return;
-    }
-
-    this.dom.rxStatus.classList.remove('error');
-    this.dom.video.srcObject = this.stream;
-    await this.dom.video.play();
-
-    this.scanning = true;
-    this.dom.startCameraBtn.disabled = true;
-    this.dom.stopCameraBtn.disabled = false;
-    this.dom.rxStatus.textContent = 'Cámara activa. Apunta al emisor…';
-    this._scanLoop();
-  }
-
-  stopCamera() {
-    this.scanning = false;
-    if (this.rafHandle) cancelAnimationFrame(this.rafHandle);
-    if (this.stream) {
-      this.stream.getTracks().forEach((t) => t.stop());
-      this.stream = null;
-    }
-    this.dom.startCameraBtn.disabled = false;
-    this.dom.stopCameraBtn.disabled = true;
-  }
-
-  _resetForNewFile(fileId, meta) {
-    this.currentFileId = fileId;
-    this.decoder = new FountainDecoder(meta.totalBlocks, meta.blockSize, meta.fileSize);
-    this.fileMeta = { name: meta.name, mime: meta.mime, size: meta.fileSize };
-    this.uniquePackets = 0;
-    this.dom.rxStatus.textContent = `Recibiendo "${meta.name}" (${meta.totalBlocks} bloques)…`;
-    this._updateProgress(0);
-  }
-
-  _scanLoop() {
-    if (!this.scanning) return;
-
-    const video = this.dom.video;
-    if (video.readyState === video.HAVE_ENOUGH_DATA) {
-      const targetWidth = 720;
-      const scale = targetWidth / video.videoWidth;
-      this.canvas.width = targetWidth;
-      this.canvas.height = Math.round(video.videoHeight * scale);
-      this.ctx.drawImage(video, 0, 0, this.canvas.width, this.canvas.height);
-
-      const imageData = this.ctx.getImageData(0, 0, this.canvas.width, this.canvas.height);
-      const code = jsQR(imageData.data, imageData.width, imageData.height, {
-        inversionAttempts: 'dontInvert',
-      });
-
-      if (code && code.binaryData && code.binaryData.length > 0) {
-        this._handleDecodedBytes(new Uint8Array(code.binaryData));
-      }
-    }
-
-    this.rafHandle = requestAnimationFrame(() => this._scanLoop());
-  }
-
-  _handleDecodedBytes(bytes) {
-    const packet = decodePacket(bytes);
-    if (!packet) return;
-
-    if (packet.type === 'metadata') {
-      if (this.currentFileId !== packet.fileId) {
-        this._resetForNewFile(packet.fileId, packet);
-      }
-      return;
-    }
-
-    if (packet.type === 'data') {
-      if (this.currentFileId === null) return;
-      if (packet.fileId !== this.currentFileId) return;
-      if (this.decoder.isComplete) return;
-
-      const isNew = this.decoder.addPacket(packet.seed, packet.payload);
-      if (isNew) this.uniquePackets++;
-
-      this._updateProgress(this.decoder.progress);
-
-      if (this.decoder.isComplete) {
-        this._finishAndDownload();
-      }
-    }
-  }
-
-  _updateProgress(fraction) {
-    const pct = Math.round(fraction * 100);
-    this.dom.progressBar.style.width = `${pct}%`;
-    this.dom.progressLabel.textContent =
-      `${pct}% · bloques resueltos: ${this.decoder ? this.decoder.solvedCount : 0}/${this.decoder ? this.decoder.K : 0} ` +
-      `· paquetes únicos recibidos: ${this.uniquePackets}`;
-  }
-
-  _finishAndDownload() {
-    const fileBytes = this.decoder.reconstruct();
-    const blob = new Blob([fileBytes], { type: this.fileMeta.mime || 'application/octet-stream' });
-    const url = URL.createObjectURL(blob);
-
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = this.fileMeta.name || 'archivo_recibido';
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 10000);
-
-    this.dom.rxStatus.textContent = `✅ Archivo "${this.fileMeta.name}" reconstruido y descargado.`;
-    this.stopCamera();
-    this.currentFileId = null;
-  }
-}
-
-/* ============================================================
- * app.js — arranque: pestañas + wiring del DOM
- * ========================================================== */
-function initTabs(receiverRef) {
-  const tabs = document.querySelectorAll('.tab-btn');
-  const panels = document.querySelectorAll('.tab-panel');
-
-  tabs.forEach((btn) => {
-    btn.addEventListener('click', () => {
-      tabs.forEach((b) => b.classList.remove('active'));
-      panels.forEach((p) => p.classList.remove('active'));
-      btn.classList.add('active');
-      document.getElementById(btn.dataset.target).classList.add('active');
-
-      if (btn.dataset.target !== 'panel-receiver' && receiverRef.current) {
-        receiverRef.current.stopCamera();
-      }
-    });
-  });
-}
-
-function initSender() {
-  const dom = {
-    fileInput: document.getElementById('fileInput'),
-    playBtn: document.getElementById('playBtn'),
-    pauseBtn: document.getElementById('pauseBtn'),
-    fpsSlider: document.getElementById('fpsSlider'),
-    fpsLabel: document.getElementById('fpsLabel'),
-    status: document.getElementById('txStatus'),
-    frameCounter: document.getElementById('frameCounter'),
-    qrCanvas: document.getElementById('qrCanvas'),
-  };
-  dom.fpsSlider.min = CONFIG.MIN_FPS;
-  dom.fpsSlider.max = CONFIG.MAX_FPS;
-  dom.fpsSlider.value = CONFIG.DEFAULT_FPS;
-  dom.fpsLabel.textContent = `${CONFIG.DEFAULT_FPS} FPS`;
-
-  return new SenderModule(dom);
-}
-
-function initReceiver() {
-  const dom = {
-    startCameraBtn: document.getElementById('startCameraBtn'),
-    stopCameraBtn: document.getElementById('stopCameraBtn'),
-    video: document.getElementById('video'),
-    progressBar: document.getElementById('progressBar'),
-    progressLabel: document.getElementById('progressLabel'),
-    rxStatus: document.getElementById('rxStatus'),
-  };
-  return new ReceiverModule(dom);
-}
-
-window.addEventListener('DOMContentLoaded', () => {
-  const receiverRef = { current: null };
-  initTabs(receiverRef);
-  initSender();
-  receiverRef.current = initReceiver();
-});
-
-})();
-</script>
-</body>
-</html>
