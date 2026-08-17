@@ -126,6 +126,21 @@ main { max-width: 480px; margin: 18px auto 40px; padding: 0 16px; }
 
 .app-footer { text-align: center; color: var(--text-dim); font-size: 11px; padding: 20px 0 30px; opacity: .6; }
 
+.debug-panel {
+  max-width: 480px;
+  margin: 12px auto 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: #05070c;
+  font-size: 11px;
+  line-height: 1.6;
+  color: var(--text-dim);
+}
+.debug-panel strong { color: var(--text); }
+.debug-panel .ok { color: #6ee7a8; }
+.debug-panel .fail { color: var(--danger); }
+
 @media (prefers-reduced-motion: reduce) { .progress-inner { transition: none; } }
 </style>
 </head>
@@ -134,6 +149,11 @@ main { max-width: 480px; margin: 18px auto 40px; padding: 0 16px; }
     <h1>💡 LuzTransfer</h1>
     <p class="subtitle">Transferencia de archivos aire-gap por luz (pantalla + cámara), sin Wi-Fi ni Bluetooth</p>
   </header>
+
+  <div id="debugPanel" class="debug-panel">
+    <strong>Diagnóstico:</strong>
+    <div id="debugLines">Cargando…</div>
+  </div>
 
   <nav class="tabs" role="tablist">
     <button class="tab-btn active" data-target="panel-sender" role="tab">📤 Emisor</button>
@@ -203,6 +223,37 @@ main { max-width: 480px; margin: 18px auto 40px; padding: 0 16px; }
 <script>
 (function () {
 'use strict';
+
+/* ============================================================
+ * debug.js — panel de diagnóstico visible en pantalla
+ * No tenemos acceso a la consola del navegador del celular, así
+ * que mostramos aquí mismo si las librerías cargaron y cualquier
+ * error de JS que ocurra, para poder diagnosticar por captura de
+ * pantalla.
+ * ========================================================== */
+const debugLines = [];
+function debugLog(msg, isError) {
+  debugLines.push(`${isError ? '❌' : '✅'} ${msg}`);
+  const el = document.getElementById('debugLines');
+  if (el) {
+    el.innerHTML = debugLines
+      .map((l) => `<div class="${l.startsWith('❌') ? 'fail' : 'ok'}">${l}</div>`)
+      .join('');
+  }
+}
+
+window.addEventListener('error', (e) => {
+  debugLog(`Error JS: ${e.message} (línea ${e.lineno})`, true);
+});
+window.addEventListener('unhandledrejection', (e) => {
+  debugLog(`Promesa rechazada: ${e.reason}`, true);
+});
+
+window.addEventListener('DOMContentLoaded', () => {
+  debugLog(`QRCode (generador) ${typeof QRCode !== 'undefined' ? 'cargó correctamente' : 'NO cargó'}`, typeof QRCode === 'undefined');
+  debugLog(`jsQR (lector) ${typeof jsQR !== 'undefined' ? 'cargó correctamente' : 'NO cargó'}`, typeof jsQR === 'undefined');
+  debugLog(`getUserMedia ${navigator.mediaDevices && navigator.mediaDevices.getUserMedia ? 'disponible' : 'NO disponible (¿http sin https?)'}`, !(navigator.mediaDevices && navigator.mediaDevices.getUserMedia));
+});
 
 /* ============================================================
  * config.js — parámetros compartidos
@@ -510,60 +561,4 @@ class SenderModule {
     this.timerHandle = null;
     this.fps = CONFIG.DEFAULT_FPS;
 
-    this.dom.fileInput.addEventListener('change', (e) => this.onFileSelected(e));
-    this.dom.playBtn.addEventListener('click', () => this.start());
-    this.dom.pauseBtn.addEventListener('click', () => this.stop());
-    this.dom.fpsSlider.addEventListener('input', (e) => {
-      this.fps = Number(e.target.value);
-      this.dom.fpsLabel.textContent = `${this.fps} FPS`;
-      if (this.running) this._reschedule();
-    });
-  }
-
-  async onFileSelected(evt) {
-    const file = evt.target.files[0];
-    if (!file) return;
-
-    if (file.size > CONFIG.MAX_FILE_SIZE) {
-      this.dom.status.textContent =
-        `El archivo pesa ${(file.size / 1024 / 1024).toFixed(2)} MB. Máximo permitido: 2 MB.`;
-      this.dom.status.classList.add('error');
-      evt.target.value = '';
-      return;
-    }
-
-    this.dom.status.classList.remove('error');
-    const buffer = new Uint8Array(await file.arrayBuffer());
-
-    this.encoder = new FountainEncoder(buffer, CONFIG.BLOCK_SIZE);
-    this.fileId = (Math.random() * 0xffffffff) >>> 0;
-    this.fileMeta = { name: file.name, mime: file.type, size: file.size };
-    this.frameCount = 0;
-    this.seedCounter = (Math.random() * 0xffffffff) >>> 0;
-
-    this.dom.status.textContent =
-      `Listo: "${file.name}" · ${(file.size / 1024).toFixed(1)} KB · ` +
-      `${this.encoder.K} bloques fuente · paquete = ${CONFIG.BLOCK_SIZE + 9} bytes.`;
-    this.dom.playBtn.disabled = false;
-    this.dom.pauseBtn.disabled = true;
-  }
-
-  start() {
-    if (!this.encoder || this.running) return;
-    this.running = true;
-    this.dom.playBtn.disabled = true;
-    this.dom.pauseBtn.disabled = false;
-    this._reschedule();
-  }
-
-  stop() {
-    this.running = false;
-    if (this.timerHandle) clearInterval(this.timerHandle);
-    this.timerHandle = null;
-    this.dom.playBtn.disabled = false;
-    this.dom.pauseBtn.disabled = true;
-  }
-
-  _reschedule() {
-    if (this.timerHandle) clearInterval(this.timerHandle);
-    const intervalMs = 1000 / this.fps;
+    this.dom.fileInput.addEventListener
