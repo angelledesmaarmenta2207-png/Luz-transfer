@@ -1,0 +1,527 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mi Parada</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+/* Layout: mapa a pantalla completa arriba, panel de control abajo como letrero de ruta. */
+:root {
+  --bg: #eef1f4;
+  --surface: #ffffff;
+  --ink: #12202b;
+  --muted: #566672;
+  --line: #d3dbe1;
+  --accent: #f2a900;
+  --on-accent: #1b1400;
+  --ok: #1d7f49;
+  --alert: #d63a2f;
+  --on-alert: #ffffff;
+  --font-display: "Barlow Condensed", "Arial Narrow", system-ui, sans-serif;
+  --font-body: "Barlow", system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0e171f;
+    --surface: #16232d;
+    --ink: #e8eef2;
+    --muted: #93a4b0;
+    --line: #26353f;
+    --accent: #ffb81c;
+    --on-accent: #1b1400;
+    --ok: #4cc27f;
+    --alert: #ff5a4d;
+    --on-alert: #1a0503;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0e171f;
+  --surface: #16232d;
+  --ink: #e8eef2;
+  --muted: #93a4b0;
+  --line: #26353f;
+  --accent: #ffb81c;
+  --on-accent: #1b1400;
+  --ok: #4cc27f;
+  --alert: #ff5a4d;
+  --on-alert: #1a0503;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font: 16px/1.4 var(--font-body);
+  -webkit-text-size-adjust: 100%;
+  overflow: hidden;
+}
+button, input { font: inherit; color: inherit; }
+:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+
+#app { height: 100%; display: flex; flex-direction: column; }
+
+.topbar {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 16px; padding-top: calc(10px + env(safe-area-inset-top, 0px));
+  background: var(--surface); border-bottom: 1px solid var(--line);
+}
+.brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.brand-sign {
+  background: var(--accent); color: var(--on-accent);
+  font: 700 22px/1 var(--font-display); letter-spacing: .02em;
+  padding: 6px 9px 5px; border-radius: 4px;
+}
+.brand-name { font: 600 20px/1 var(--font-display); letter-spacing: .06em; text-transform: uppercase; }
+.state {
+  font: 600 13px/1 var(--font-body); letter-spacing: .06em; text-transform: uppercase;
+  padding: 7px 10px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted);
+  white-space: nowrap;
+}
+.state.on { color: var(--ok); border-color: var(--ok); }
+
+#map { flex: 1; min-height: 180px; background: var(--bg); }
+.leaflet-container { font-family: var(--font-body); }
+
+.pin {
+  width: 30px; height: 30px; border-radius: 50% 50% 50% 0; transform: rotate(-45deg);
+  background: var(--accent); border: 3px solid var(--on-accent);
+  box-shadow: 0 2px 6px rgba(0,0,0,.35);
+}
+.pin::after { content: ""; position: absolute; inset: 7px; border-radius: 50%; background: var(--on-accent); }
+
+.panel {
+  background: var(--surface); border-top: 1px solid var(--line);
+  padding: 14px 16px; padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px));
+  display: flex; flex-direction: column; gap: 12px;
+  max-height: 58%; overflow-y: auto;
+}
+
+.search { display: flex; gap: 8px; }
+.search input {
+  flex: 1; min-width: 0; height: 48px; padding: 0 14px;
+  background: var(--bg); border: 1px solid var(--line); border-radius: 8px;
+}
+.search input::placeholder { color: var(--muted); }
+.btn {
+  height: 48px; padding: 0 16px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--bg); font-weight: 600; cursor: pointer;
+}
+.btn.primary { background: var(--accent); color: var(--on-accent); border-color: transparent; }
+.btn.stop { background: var(--alert); color: var(--on-alert); border-color: transparent; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn.big { width: 100%; height: 56px; font: 700 22px/1 var(--font-display); letter-spacing: .06em; text-transform: uppercase; }
+
+.results { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.results li + li { border-top: 1px solid var(--line); }
+.results button {
+  width: 100%; text-align: left; padding: 11px 14px; background: transparent; border: 0; cursor: pointer;
+  display: block; overflow-wrap: anywhere;
+}
+.results button:hover { background: var(--bg); }
+.hint { margin: 0; color: var(--muted); font-size: 14px; }
+
+.dest { display: flex; flex-direction: column; gap: 4px; }
+.label { font: 600 12px/1 var(--font-body); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.dest-name { font-weight: 600; overflow-wrap: anywhere; }
+
+.radius { display: flex; flex-direction: column; gap: 8px; }
+.chips { display: flex; gap: 8px; flex-wrap: wrap; }
+.chip {
+  height: 40px; padding: 0 14px; border-radius: 999px; border: 1px solid var(--line);
+  background: var(--bg); cursor: pointer; font-weight: 600; font-variant-numeric: tabular-nums;
+}
+.chip[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+
+.live { display: flex; flex-direction: column; gap: 10px; }
+.dist-row { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.dist { font: 700 56px/1 var(--font-display); font-variant-numeric: tabular-nums; letter-spacing: .01em; }
+.dist-unit { color: var(--muted); }
+.bar { height: 10px; background: var(--bg); border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
+.bar > div { height: 100%; width: 0%; background: var(--accent); transition: width .6s ease; }
+.meta { display: flex; justify-content: space-between; gap: 12px; color: var(--muted); font-size: 14px; flex-wrap: wrap; }
+.warn { color: var(--alert); font-weight: 500; }
+
+.row { display: flex; gap: 8px; }
+.row .btn { flex: 1; }
+
+#alarm {
+  position: fixed; inset: 0; z-index: 3000; display: flex; flex-direction: column;
+  align-items: center; justify-content: center; gap: 22px; padding: 24px; text-align: center;
+  background: var(--alert); color: var(--on-alert);
+  animation: flash 0.9s steps(2, jump-none) infinite;
+}
+@keyframes flash { 0% { filter: brightness(1); } 100% { filter: brightness(1.28); } }
+@media (prefers-reduced-motion: reduce) { #alarm { animation: none; } .bar > div { transition: none; } }
+#alarm h2 { margin: 0; font: 700 clamp(48px, 16vw, 96px)/0.95 var(--font-display); text-transform: uppercase; letter-spacing: .02em; }
+#alarm p { margin: 0; font-size: 20px; max-width: 28ch; overflow-wrap: anywhere; }
+#alarm .btn { background: var(--on-alert); color: var(--alert); border: 0; height: 64px; width: min(100%, 360px); font: 700 24px/1 var(--font-display); letter-spacing: .06em; text-transform: uppercase; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-sign">PARADA</span>
+      <span class="brand-name">Mi Parada</span>
+    </div>
+    <span id="state" class="state">En espera</span>
+  </header>
+
+  <div id="map" aria-label="Mapa"></div>
+
+  <main class="panel">
+    <form id="searchForm" class="search" role="search">
+      <input id="q" type="search" inputmode="search" autocomplete="off" placeholder="Calle, colonia o lugar donde te bajas" aria-label="Dirección de destino">
+      <button class="btn primary" type="submit" id="searchBtn">Buscar</button>
+    </form>
+    <ul id="results" class="results" hidden></ul>
+    <p id="searchMsg" class="hint" hidden></p>
+
+    <section class="dest" id="destBox">
+      <span class="label">Destino</span>
+      <span id="destName" class="dest-name">Busca una dirección o toca el mapa para marcar dónde te bajas.</span>
+    </section>
+
+    <section class="radius" id="radiusBox">
+      <span class="label">Sonar cuando falten</span>
+      <div class="chips" id="chips">
+        <button class="chip" type="button" data-r="300" aria-pressed="false">300 m</button>
+        <button class="chip" type="button" data-r="500" aria-pressed="true">500 m</button>
+        <button class="chip" type="button" data-r="1000" aria-pressed="false">1 km</button>
+        <button class="chip" type="button" data-r="2000" aria-pressed="false">2 km</button>
+      </div>
+    </section>
+
+    <section class="live" id="liveBox" hidden>
+      <span class="label">Distancia al destino</span>
+      <div class="dist-row"><span class="dist" id="dist">--</span><span class="dist-unit" id="distUnit">buscando señal GPS</span></div>
+      <div class="bar" aria-hidden="true"><div id="barFill"></div></div>
+      <div class="meta"><span id="acc">Precisión: --</span><span id="wake">Pantalla: --</span></div>
+      <p id="liveMsg" class="hint warn" hidden></p>
+    </section>
+
+    <div class="row" id="actions">
+      <button class="btn" type="button" id="locBtn">Mi ubicación</button>
+      <button class="btn" type="button" id="testBtn">Probar sonido</button>
+    </div>
+    <button class="btn primary big" type="button" id="startBtn" disabled>Activar alarma</button>
+    <p class="hint" id="footHint">Deja esta pestaña abierta y la pantalla encendida mientras viajas. Si el teléfono se bloquea, el GPS del navegador se detiene y la alarma no suena.</p>
+  </main>
+</div>
+
+<div id="alarm" hidden role="alertdialog" aria-live="assertive" aria-labelledby="alarmTitle">
+  <h2 id="alarmTitle">Ya llegaste</h2>
+  <p id="alarmText">Estás cerca de tu parada.</p>
+  <button class="btn" type="button" id="stopBtn">Apagar alarma</button>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var $ = function (id) { return document.getElementById(id); };
+  var store = {
+    get: function (k) { try { return JSON.parse(localStorage.getItem(k)); } catch (e) { return null; } },
+    set: function (k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+  };
+
+  var dest = null;           // {lat, lng, name}
+  var radius = 500;          // metros
+  var running = false;
+  var watchId = null;
+  var userPos = null;        // {lat, lng, acc}
+  var startDist = null;
+  var alarmOn = false;
+  var wakeLock = null;
+
+  /* ---------- Mapa ---------- */
+  var map = L.map("map", { zoomControl: false }).setView([21.0, -101.0], 6);
+  L.control.zoom({ position: "topright" }).addTo(map);
+  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+    maxZoom: 19,
+    attribution: "&copy; OpenStreetMap"
+  }).addTo(map);
+
+  var destMarker = null, destCircle = null, userMarker = null, userAcc = null;
+  var pinIcon = L.divIcon({ className: "", html: '<div class="pin"></div>', iconSize: [30, 30], iconAnchor: [8, 28] });
+
+  function setDest(lat, lng, name, fit) {
+    dest = { lat: lat, lng: lng, name: name };
+    store.set("mp_dest", dest);
+    $("destName").textContent = name;
+    if (!destMarker) {
+      destMarker = L.marker([lat, lng], { icon: pinIcon }).addTo(map);
+      destCircle = L.circle([lat, lng], {
+        radius: radius, color: "#f2a900", weight: 2, fillColor: "#f2a900", fillOpacity: 0.18
+      }).addTo(map);
+    } else {
+      destMarker.setLatLng([lat, lng]);
+      destCircle.setLatLng([lat, lng]);
+    }
+    destCircle.setRadius(radius);
+    if (fit) {
+      var pts = [[lat, lng]];
+      if (userPos) pts.push([userPos.lat, userPos.lng]);
+      if (pts.length > 1) map.fitBounds(pts, { padding: [50, 50], maxZoom: 16 });
+      else map.setView([lat, lng], 15);
+    }
+    if (!running) $("startBtn").disabled = false;
+  }
+
+  map.on("click", function (e) {
+    if (running) return;
+    setDest(e.latlng.lat, e.latlng.lng, "Punto marcado en el mapa", false);
+    hideResults();
+  });
+
+  function setUser(lat, lng, acc) {
+    userPos = { lat: lat, lng: lng, acc: acc };
+    if (!userMarker) {
+      userMarker = L.circleMarker([lat, lng], {
+        radius: 8, color: "#ffffff", weight: 3, fillColor: "#1f6feb", fillOpacity: 1
+      }).addTo(map);
+      userAcc = L.circle([lat, lng], { radius: acc || 30, color: "#1f6feb", weight: 1, fillOpacity: 0.08 }).addTo(map);
+    } else {
+      userMarker.setLatLng([lat, lng]);
+      userAcc.setLatLng([lat, lng]);
+      userAcc.setRadius(acc || 30);
+    }
+  }
+
+  /* ---------- Distancia ---------- */
+  function haversine(aLat, aLng, bLat, bLng) {
+    var R = 6371000, rad = Math.PI / 180;
+    var dLat = (bLat - aLat) * rad, dLng = (bLng - aLng) * rad;
+    var s = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+            Math.cos(aLat * rad) * Math.cos(bLat * rad) * Math.sin(dLng / 2) * Math.sin(dLng / 2);
+    return 2 * R * Math.asin(Math.sqrt(s));
+  }
+  function fmtDist(m) {
+    if (m >= 10000) return { v: (m / 1000).toFixed(0), u: "km para tu destino" };
+    if (m >= 1000) return { v: (m / 1000).toFixed(1), u: "km para tu destino" };
+    return { v: String(Math.round(m)), u: "metros para tu destino" };
+  }
+
+  /* ---------- Búsqueda ---------- */
+  function hideResults() { $("results").hidden = true; $("results").innerHTML = ""; }
+  function msg(t) { var el = $("searchMsg"); el.textContent = t || ""; el.hidden = !t; }
+
+  $("searchForm").addEventListener("submit", function (ev) {
+    ev.preventDefault();
+    var q = $("q").value.trim();
+    if (!q || running) return;
+    hideResults(); msg("Buscando…");
+    var url = "https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&addressdetails=0&accept-language=es&countrycodes=mx&q=" + encodeURIComponent(q);
+    if (userPos) {
+      var d = 0.6;
+      url += "&viewbox=" + (userPos.lng - d) + "," + (userPos.lat + d) + "," + (userPos.lng + d) + "," + (userPos.lat - d);
+    }
+    fetch(url).then(function (r) {
+      if (!r.ok) throw new Error("http " + r.status);
+      return r.json();
+    }).then(function (list) {
+      if (!list.length) { msg("No encontré ese lugar. Prueba con calle, colonia y ciudad, o toca el mapa."); return; }
+      msg("");
+      var ul = $("results");
+      list.forEach(function (it) {
+        var li = document.createElement("li");
+        var b = document.createElement("button");
+        b.type = "button";
+        b.textContent = it.display_name;
+        b.addEventListener("click", function () {
+          var short = it.display_name.split(",").slice(0, 3).join(",").trim();
+          setDest(parseFloat(it.lat), parseFloat(it.lon), short, true);
+          hideResults(); msg("");
+        });
+        li.appendChild(b); ul.appendChild(li);
+      });
+      ul.hidden = false;
+    }).catch(function () {
+      msg("No pude buscar. Revisa tu conexión a internet o toca el mapa para marcar el destino.");
+    });
+  });
+
+  /* ---------- Radio ---------- */
+  function applyRadius(r) {
+    radius = r;
+    store.set("mp_radius", r);
+    Array.prototype.forEach.call($("chips").children, function (c) {
+      c.setAttribute("aria-pressed", String(Number(c.dataset.r) === r));
+    });
+    if (destCircle) destCircle.setRadius(r);
+  }
+  $("chips").addEventListener("click", function (e) {
+    var c = e.target.closest(".chip");
+    if (c) applyRadius(Number(c.dataset.r));
+  });
+
+  /* ---------- Sonido ---------- */
+  var actx = null, beepTimer = null, vibTimer = null;
+  function ensureAudio() {
+    var C = window.AudioContext || window.webkitAudioContext;
+    if (!actx && C) actx = new C();
+    if (actx && actx.state === "suspended") actx.resume();
+  }
+  function beep(freq, dur) {
+    if (!actx) return;
+    var o = actx.createOscillator(), g = actx.createGain(), t = actx.currentTime;
+    o.type = "square"; o.frequency.value = freq;
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.6, t + 0.01);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(g); g.connect(actx.destination);
+    o.start(t); o.stop(t + dur + 0.03);
+  }
+  function vibrate() { if (navigator.vibrate) navigator.vibrate([500, 200, 500, 200, 500]); }
+
+  function startAlarm(text) {
+    if (alarmOn) return;
+    alarmOn = true;
+    ensureAudio();
+    $("alarmText").textContent = text;
+    $("alarm").hidden = false;
+    var n = 0;
+    beepTimer = setInterval(function () { beep(n % 2 ? 660 : 988, 0.28); n++; }, 380);
+    vibrate(); vibTimer = setInterval(vibrate, 2200);
+    document.title = "¡LLEGASTE!";
+  }
+  function stopAlarm() {
+    alarmOn = false;
+    clearInterval(beepTimer); clearInterval(vibTimer);
+    if (navigator.vibrate) navigator.vibrate(0);
+    $("alarm").hidden = true;
+    document.title = "Mi Parada";
+  }
+  $("stopBtn").addEventListener("click", function () {
+    stopAlarm();
+    if (running) stopTracking();
+  });
+
+  $("testBtn").addEventListener("click", function () {
+    ensureAudio();
+    var i = 0;
+    var t = setInterval(function () { beep(i % 2 ? 660 : 988, 0.25); if (++i > 4) clearInterval(t); }, 320);
+    if (navigator.vibrate) navigator.vibrate([300, 150, 300]);
+  });
+
+  /* ---------- Pantalla encendida ---------- */
+  function requestWake() {
+    if (!("wakeLock" in navigator)) { $("wake").textContent = "Pantalla: no se puede mantener encendida"; return; }
+    navigator.wakeLock.request("screen").then(function (l) {
+      wakeLock = l;
+      $("wake").textContent = "Pantalla: se mantiene encendida";
+      l.addEventListener("release", function () { wakeLock = null; });
+    }).catch(function () { $("wake").textContent = "Pantalla: se puede apagar sola"; });
+  }
+  document.addEventListener("visibilitychange", function () {
+    if (running && document.visibilityState === "visible" && !wakeLock) requestWake();
+  });
+
+  /* ---------- Seguimiento GPS ---------- */
+  function setState(on) {
+    var s = $("state");
+    s.textContent = on ? "Alarma activa" : "En espera";
+    s.classList.toggle("on", on);
+  }
+  function liveMsg(t) { var el = $("liveMsg"); el.textContent = t || ""; el.hidden = !t; }
+
+  function onPos(p) {
+    var c = p.coords;
+    setUser(c.latitude, c.longitude, c.accuracy);
+    if (!running || !dest) return;
+    var d = haversine(c.latitude, c.longitude, dest.lat, dest.lng);
+    if (startDist === null) startDist = Math.max(d, radius + 1);
+    var f = fmtDist(d);
+    $("dist").textContent = f.v;
+    $("distUnit").textContent = f.u;
+    var pct = Math.min(100, Math.max(0, (1 - (d - radius) / (startDist - radius)) * 100));
+    $("barFill").style.width = pct.toFixed(0) + "%";
+    $("acc").textContent = "Precisión: ±" + Math.round(c.accuracy) + " m";
+    liveMsg(c.accuracy > 400 ? "Señal GPS débil. La alarma puede sonar tarde." : "");
+    if (d <= radius) startAlarm("Estás a " + Math.round(d) + " m de " + dest.name + ".");
+  }
+  function onPosErr(err) {
+    if (err.code === 1) {
+      liveMsg("Permiso de ubicación denegado. Actívalo en los ajustes del navegador y vuelve a intentar.");
+      if (running) stopTracking(true);
+    } else if (err.code === 2) {
+      liveMsg("No hay señal de ubicación. Sigue intentando, la alarma se activará cuando regrese.");
+    } else {
+      liveMsg("El GPS tarda en responder. Sigue intentando.");
+    }
+  }
+
+  function startTracking() {
+    if (!dest) return;
+    if (!navigator.geolocation) { msg("Este navegador no ofrece ubicación."); return; }
+    ensureAudio();
+    running = true; startDist = null;
+    $("liveBox").hidden = false;
+    $("dist").textContent = "--"; $("distUnit").textContent = "buscando señal GPS";
+    $("barFill").style.width = "0%";
+    $("acc").textContent = "Precisión: --";
+    liveMsg("");
+    $("startBtn").textContent = "Cancelar alarma";
+    $("startBtn").classList.remove("primary"); $("startBtn").classList.add("stop");
+    $("startBtn").disabled = false;
+    $("searchForm").style.opacity = ".5";
+    $("q").disabled = true; $("searchBtn").disabled = true;
+    $("footHint").textContent = "Alarma activa. No cierres esta pestaña ni bloquees el teléfono.";
+    setState(true);
+    requestWake();
+    watchId = navigator.geolocation.watchPosition(onPos, onPosErr, {
+      enableHighAccuracy: true, maximumAge: 2000, timeout: 30000
+    });
+  }
+  function stopTracking(keepMsg) {
+    running = false;
+    if (watchId !== null) navigator.geolocation.clearWatch(watchId);
+    watchId = null;
+    if (wakeLock) { try { wakeLock.release(); } catch (e) {} wakeLock = null; }
+    if (!keepMsg) $("liveBox").hidden = true;
+    $("startBtn").textContent = "Activar alarma";
+    $("startBtn").classList.add("primary"); $("startBtn").classList.remove("stop");
+    $("startBtn").disabled = !dest;
+    $("searchForm").style.opacity = "";
+    $("q").disabled = false; $("searchBtn").disabled = false;
+    $("footHint").textContent = "Deja esta pestaña abierta y la pantalla encendida mientras viajas. Si el teléfono se bloquea, el GPS del navegador se detiene y la alarma no suena.";
+    setState(false);
+  }
+
+  $("startBtn").addEventListener("click", function () {
+    if (running) { stopAlarm(); stopTracking(); } else startTracking();
+  });
+
+  $("locBtn").addEventListener("click", function () {
+    if (!navigator.geolocation) { msg("Este navegador no ofrece ubicación."); return; }
+    msg("Buscando tu ubicación…");
+    navigator.geolocation.getCurrentPosition(function (p) {
+      msg("");
+      setUser(p.coords.latitude, p.coords.longitude, p.coords.accuracy);
+      if (dest) map.fitBounds([[dest.lat, dest.lng], [p.coords.latitude, p.coords.longitude]], { padding: [50, 50], maxZoom: 16 });
+      else map.setView([p.coords.latitude, p.coords.longitude], 15);
+    }, function (err) {
+      msg(err.code === 1 ? "Permiso de ubicación denegado. Actívalo en los ajustes del navegador." : "No pude obtener tu ubicación. Intenta de nuevo al aire libre.");
+    }, { enableHighAccuracy: true, timeout: 20000 });
+  });
+
+  /* ---------- Estado guardado ---------- */
+  var r0 = store.get("mp_radius");
+  if ([300, 500, 1000, 2000].indexOf(r0) !== -1) applyRadius(r0); else applyRadius(500);
+  var d0 = store.get("mp_dest");
+  if (d0 && typeof d0.lat === "number" && typeof d0.lng === "number") {
+    setDest(d0.lat, d0.lng, d0.name || "Destino guardado", true);
+  }
+})();
+</script>
+</body>
+</html>
